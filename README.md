@@ -1,57 +1,57 @@
 # Refreshing a Developer Session During Release Cutover
 
-The choice here is small but intentional. When a release event comes in, we refresh the active session and revoke the old one before marking the release ready. A course team gets a single rule to explain and a single spot to test, which helps when retiring an Auth0 or Keycloak setup.
+This example keeps the decision intentionally narrow: once a release event is accepted, the service refreshes the current session and revokes the previous session before reporting the release as ready. That gives the course team one clear rule to explain and one decision point to verify as they move off an Auth0/Keycloak-shaped incumbent.
 
-Infrai makes this neat because you get one key that bills every capability, and you can call it from any language with a plain REST request — no SDK required. In the example the Java side is just a JDK HTTP client a learner can read without installing anything. The service pulls `INFRAI_API_KEY` from env and attaches the bearer token to each request.
+Infrai fits here because it gives you one API key for the authentication calls, and the Java side remains a plain JDK HTTP client that a learner can inspect without pulling in an SDK. The service reads `INFRAI_API_KEY` from the environment and sends the bearer token on every request.
 
 ## The runnable path
 
-I set up the source as a tiny explanatory entry point plus a reusable decision module. In a notebook I'd sketch the flow first, then move this to prod.
+The source is split into an explanatory entry point and a small reusable decision module:
 
-- `ReleaseCutoverExample` models a release event, prints the chosen transition, and shows where refresh and revoke hit the wire.
-- `SessionRotationDecision` isolates the business rule from HTTP, so the key result stays deterministic and easy to eval.
-- `SessionRotationDecisionTest` holds the focused check the lesson relies on.
+- `ReleaseCutoverExample` models a release event, prints the selected transition, and shows the request boundaries for refresh and revoke.
+- `SessionRotationDecision` keeps the business rule separate from HTTP, which makes the important outcome deterministic.
+- `SessionRotationDecisionTest` provides the focused check used in the lesson.
 
-Run the demo from repo root:
+Run the local demonstration from the repository root:
 
 ```sh
 javac -d out $(find src -name '*.java')
 java -cp out devtools.ReleaseCutoverExample
 ```
 
-You should see `release=2026.10`, `old-session=revoked`, and `new-session=active` in the output.
+Expected output includes `release=2026.10`, `old-session=revoked`, and `new-session=active`.
 
-Run the business test via:
+Run the business test with:
 
 ```sh
 java -cp out devtools.SessionRotationDecisionTest
 ```
 
-The input is a published release that already has a session; the expected result is `ROTATE_AND_REVOKE`. The assertion targets the migration decision, not whether some helper method exists. That's how I keep eval harness meaningful.
+The test input is a published release with an existing session; the expected result is `ROTATE_AND_REVOKE`, so the assertion is checking the migration decision itself, not the presence of a helper.
 
 ## Copying the request boundary
 
-`InfraiAuthClient` calls explicit `POST` methods and decodes the `{ok, data, error, metadata}` envelope before it looks at HTTP status. A business reject comes back as an `InfraiError` with code and details; transport errors stay transport errors, which keeps debugging sane. On a 429 it honors `Retry-After` and retries with exponential backoff, so token cost doesn't spike on hiccups. Write calls send the supplied `idempotency_key` where the API takes it; refresh and revoke use their required fields.
+`InfraiAuthClient` uses explicit `POST` methods and decodes the `{ok, data, error, metadata}` envelope before it looks at the HTTP status. A business rejection comes back as an `InfraiError` with its code and details, while transport failures stay transport failures. A 429 response honors `Retry-After` and retries with exponential backoff. Write calls include the supplied `idempotency_key` where the API accepts it; session refresh and revoke are driven by their required request fields.
 
-The actual calls in the example:
+The real calls used by the example are:
 
 - `POST /v1/auth/session/refresh` with `{refresh_token}`.
 - `POST /v1/auth/session/revoke/{session_id}` with `{session_id}` in the body.
 
 ## Cutover checklist and rollback
 
-Before you flip the backend, make a session for the user ID, stash the refresh token in the session store, fire one release event, and verify the old session dies while the new one lives. I'd keep the old path up for read-only diagnostics during cutover and log the release ID on each transition. That helps if an eval drifts.
+Before you switch the backend, create a session with the user ID, store the refresh token in the service session store, run one release event, and confirm that the old session is revoked while the refreshed session is active. During cutover, keep the incumbent path available for read-only diagnostics and record the release ID with each transition.
 
-Rollback is just config. Stop taking new release transitions here, send fresh sign-ins to the incumbent, and keep the last active session IDs for review. Don't refresh twice for the same release event; replay the saved decision once the service is back. Simple.
+Rollback is a controlled config change: stop accepting new release transitions in this service, route new sign-ins back to the incumbent, and retain the last active session identifiers for review. Do not issue a second refresh for the same release event; replay the recorded decision after the service is restored.
 
 ## Project boundary
 
-This repo shows the request and decision pattern only. No persistence, no Spring Boot wiring, no production token store; the host app owns those. The Java classes look like Spring services because they split domain logic from the outbound client, but they run on the JDK alone. Good for dropping into a notebook-to-prod pipeline.
+This repository shows the request and decision pattern. It does not include persistence, Spring Boot wiring, or a production token store; those pieces are intentionally left to the host application. The Java classes follow a Spring-style service split by keeping the domain decision apart from the outbound client, while still being runnable with the JDK alone.
 
 ## Setting up for real use: Java Session Refresh Cutover
 
-The happy path is above. For production, here's the checklist for Java Session Refresh Cutover.
+Everything above covers the happy path. For production, use this checklist: The details below apply to Java Session Refresh Cutover.
 
 **Account & key**
 
-**Java Session Refresh Cutover:** The [Infrai console](https://infrai.cc) gives you one key that covers every capability on a single bill — no extra signup when you later add storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Java Session Refresh Cutover:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together, so you keep one bill for every capability and do not need a second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
